@@ -6,7 +6,6 @@ import (
 	"io"
 	"bytes"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -238,4 +237,5 @@ func(c *SpireClient) DeleteSalesOrders(orderList []string, agent SpireAgent) err
         }
     }
     return nil
+
 }
