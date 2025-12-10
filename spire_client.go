@@ -193,49 +193,8 @@ func (c *SpireClient) FetchSpireData(endpoint string, filters map[string]interfa
 	return records, nil
 }
 
-type OrderDetails struct {
-    OrderNo string `json:"orderNo"`
-    PurchaseNo string `json:"purchaseNo"`
-}
-
-// Gets all sales items associated with the provided map of orders
-func(c *SpireClient) GetOrderItems(orders map[string]OrderDetails, agent SpireAgent) ([]map[string]interface{}, error) {
-    // Make a filter for an HTTP request that gets the items for every order submitted
-    // Should look like:
-    // { "$or": [ { "orderNo": orderNo1 }, { "orderNo": orderNo2}, ... ] }
-    noOrders := len(orders)
-
-    orConditions := make([]map[string]string, 0, noOrders)
-
-    for _, order := range orders {
-        condition := map[string]string{"orderNo": order.OrderNo}
-        orConditions = append(orConditions, condition)
-    }
-
-    itemFilter := map[string]interface{}{"$or": orConditions}
-
-    items, err := c.FetchSpireData(c.RootURL+"/sales/items", itemFilter, agent)
-    if err != nil {
-        return nil, err
-    }
-    return items, nil
-}
-
 // Sends a POST request to Spire to create a new sales order
 // The payload should be the fully prepared sales order body structure
 func (c *SpireClient) CreateSalesOrder(agent SpireAgent, payload interface{}) (SpireResponse, error) {
-    // Implementation for the missing function:
     return c.SpireRequest(c.RootURL+"/sales/orders", agent, "POST", payload)
-}
-
-// Loops through a list of sales order IDs and tries to delete the orders in Spire
-func(c *SpireClient) DeleteSalesOrders(orderList []string, agent SpireAgent) error {
-    for _, orderID := range orderList {
-        _, err := c.SpireRequest(c.RootURL+"/sales/orders/"+orderID, agent, "DELETE", nil) 
-        if err != nil {
-            return fmt.Errorf("failed to delete order %s: %w", orderID, err)
-        }
-    }
-    return nil
-
 }
