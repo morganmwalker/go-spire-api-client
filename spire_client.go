@@ -6,6 +6,7 @@ import (
 	"io"
 	"bytes"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -55,7 +56,7 @@ type SpireResponse struct {
 
 // Performs an HTTP request to the Spire server handles payload marshaling, and authentication
 // Expects a SpireResponse body on success (200 OK) or an empty body on creation/deletion (201, 204)
-func (c *SpireClient) SpireRequest(fullURL string, agent SpireAgent, method string, payload interface{}) (SpireResponse, error) { 
+func (c *SpireClient) SpireRequest(endpoint string, agent SpireAgent, method string, payload interface{}) (SpireResponse, error) { 
     var bodyReader io.Reader
     if payload != nil {
         payloadBytes, err := json.Marshal(payload)
@@ -65,7 +66,7 @@ func (c *SpireClient) SpireRequest(fullURL string, agent SpireAgent, method stri
         bodyReader = bytes.NewReader(payloadBytes)
     }
 
-    req, err := http.NewRequest(method, fullURL, bodyReader)
+    req, err := http.NewRequest(method, c.RootURL+endpoint, bodyReader)
     if err != nil {
         return SpireResponse{}, fmt.Errorf("error creating request: %w", err)
     }
@@ -80,7 +81,7 @@ func (c *SpireClient) SpireRequest(fullURL string, agent SpireAgent, method stri
     resp, err := c.HTTPClient.Do(req)
     
     if err != nil {
-        return SpireResponse{}, fmt.Errorf("error making request to %s: %w", fullURL, err)
+        return SpireResponse{}, fmt.Errorf("error making request to %s: %w", c.RootURL+endpoint, err)
     }
     defer resp.Body.Close()
 
@@ -149,14 +150,14 @@ func ConvertFilter(filters map[string]interface{}) (string, error) {
 
 // Gets ALL records for a given endpoint
 func (c *SpireClient) FetchSpireData(endpoint string, filters map[string]interface{}, agent SpireAgent) ([]map[string]interface{}, error) {
-	maxLimit := 1000
+    const maxLimit = 10000
 
 	filter, err := ConvertFilter(filters)
     if err != nil {
         return nil, fmt.Errorf("could not convert filter: %w", err)
     }
 	
-	baseURL, err := url.Parse(endpoint)
+	baseURL, err := url.Parse(c.RootURL+endpoint)
     if err != nil {
         return nil, fmt.Errorf("invalid endpoint URL: %w", err)
     }
@@ -166,6 +167,7 @@ func (c *SpireClient) FetchSpireData(endpoint string, filters map[string]interfa
     if filter != "" {
         q.Set("filter", filter)
     }
+
 	baseURL.RawQuery = q.Encode()
 	
 	initialResponse, err := c.SpireRequest(baseURL.String(), agent, "GET", nil)
@@ -174,27 +176,35 @@ func (c *SpireClient) FetchSpireData(endpoint string, filters map[string]interfa
     }
 
 	records := initialResponse.Records
-    count := initialResponse.Count
-	remainingRequests := (int(count) + maxLimit - 1) / maxLimit - 1
+    count := int(initialResponse.Count)
 
-	for i := 1; i < remainingRequests; i++ {
-		start := maxLimit * i
+    if count <= maxLimit {
+        return records, nil
+    }
 
+    allRecords := make([]map[string]interface{}, 0, count)
+    allRecords = append(allRecords, records...)
+
+	for start := maxLimit; len(allRecords) < count; start += maxLimit {
 		q.Set("start", fmt.Sprintf("%d", start))
 		baseURL.RawQuery = q.Encode()
 
 		nextPageResponse, err := c.SpireRequest(baseURL.String(), agent, "GET", nil)
 		if err != nil {
-			return nil, fmt.Errorf("error making Spire request for page %d: %w", i+2, err)
+			return nil, fmt.Errorf("error making Spire request starting at %d: %w", start, err)
 		}
-		records = append(records, nextPageResponse.Records...)
-	}
+		allRecords = append(allRecords, nextPageResponse.Records...)
 
-	return records, nil
+        if len(nextPageResponse.Records) == 0 {
+            log.Printf("Warning: Spire API returned 0 records at offset %d, breaking pagination loop.", start)
+            break
+        }
+	}
+	return allRecords, nil
 }
 
 // Sends a POST request to Spire to create a new sales order
 // The payload should be the fully prepared sales order body structure
 func (c *SpireClient) CreateSalesOrder(agent SpireAgent, payload interface{}) (SpireResponse, error) {
-    return c.SpireRequest(c.RootURL+"/sales/orders", agent, "POST", payload)
+    return c.SpireRequest("/sales/orders", agent, "POST", payload)
 }
