@@ -157,7 +157,7 @@ func (c *SpireClient) FetchSpireData(endpoint string, filters map[string]interfa
         return nil, fmt.Errorf("could not convert filter: %w", err)
     }
 	
-	baseURL, err := url.Parse(c.RootURL+endpoint)
+	baseURL, err := url.Parse(endpoint)
     if err != nil {
         return nil, fmt.Errorf("invalid endpoint URL: %w", err)
     }
@@ -208,3 +208,4 @@ func (c *SpireClient) FetchSpireData(endpoint string, filters map[string]interfa
 func (c *SpireClient) CreateSalesOrder(agent SpireAgent, payload interface{}) (SpireResponse, error) {
     return c.SpireRequest("/sales/orders", agent, "POST", payload)
 }
+
