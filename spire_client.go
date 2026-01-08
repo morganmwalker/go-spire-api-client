@@ -75,8 +75,7 @@ func (c *SpireClient) SpireRequest(endpoint string, agent SpireAgent, method str
         req.Header.Set("Content-Type", "application/json")
     }
 
-    encodedCredentials := base64.StdEncoding.EncodeToString([]byte(agent.Username + ":" + agent.Password))
-    req.Header.Set("Authorization", "Basic " + encodedCredentials)
+    req.Header.Set("Authorization", agent.BasicAuthHeader())
     
     resp, err := c.HTTPClient.Do(req)
     
