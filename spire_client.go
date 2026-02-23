@@ -49,61 +49,70 @@ func (e *SpireError) Error() string {
     return fmt.Sprintf("API request failed with status %s. Details: %s", e.Status, e.Detail)
 }
 
+// Generic version of SpireResponse
+type spireResponseBase[T any] struct {
+    Records []T     `json:"records"`
+    Count   float64 `json:"count"`
+}
+
 type SpireResponse struct {
     Records []map[string]interface{} `json:"records"`
     Count   float64                  `json:"count"`
 }
 
+// SpireRequestGeneric allows unmarshaling into specific structs
 // Performs an HTTP request to the Spire server handles payload marshaling, and authentication
-// Expects a SpireResponse body on success (200 OK) or an empty body on creation/deletion (201, 204)
-func (c *SpireClient) SpireRequest(endpoint string, agent SpireAgent, method string, payload interface{}) (SpireResponse, error) { 
+func SpireRequestGeneric[T any](c *SpireClient, endpoint string, agent SpireAgent, method string, payload interface{}) (spireResponseBase[T], error) {
     var bodyReader io.Reader
     if payload != nil {
         payloadBytes, err := json.Marshal(payload)
         if err != nil {
-            return SpireResponse{}, fmt.Errorf("failed to marshal payload: %w", err)
+            return spireResponseBase[T]{}, fmt.Errorf("failed to marshal payload: %w", err)
         }
         bodyReader = bytes.NewReader(payloadBytes)
     }
 
     req, err := http.NewRequest(method, c.RootURL+endpoint, bodyReader)
     if err != nil {
-        return SpireResponse{}, fmt.Errorf("error creating request: %w", err)
+        return spireResponseBase[T]{}, fmt.Errorf("error creating request: %w", err)
     }
 
     if payload != nil {
         req.Header.Set("Content-Type", "application/json")
     }
-
     req.Header.Set("Authorization", agent.BasicAuthHeader())
-    
+
     resp, err := c.HTTPClient.Do(req)
-    
     if err != nil {
-        return SpireResponse{}, fmt.Errorf("error making request to %s: %w", c.RootURL+endpoint, err)
+        return spireResponseBase[T]{}, fmt.Errorf("error making request to %s: %w", c.RootURL+endpoint, err)
     }
     defer resp.Body.Close()
 
     if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
-        responseBody, readErr := io.ReadAll(resp.Body)
-        if readErr != nil {
-            return SpireResponse{}, fmt.Errorf("request failed with status %s, but failed to read error body: %w", resp.Status, readErr)
-        }
-        apiErrorMessage := string(responseBody)
-        return SpireResponse{}, fmt.Errorf("API request failed with status %s. Details: %s", resp.Status, apiErrorMessage)  
+        responseBody, _ := io.ReadAll(resp.Body)
+        return spireResponseBase[T]{}, fmt.Errorf("API request failed with status %s. Details: %s", resp.Status, string(responseBody))
     }
-    
+
     if resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusNoContent {
-        return SpireResponse{}, nil
-    }
-    
-    var spireResponse SpireResponse 
-
-    if err := json.NewDecoder(resp.Body).Decode(&spireResponse); err != nil {
-        return SpireResponse{}, fmt.Errorf("error unmarshaling JSON: %w", err)
+        return spireResponseBase[T]{}, nil
     }
 
-    return spireResponse, nil
+    var result spireResponseBase[T]
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return spireResponseBase[T]{}, fmt.Errorf("error unmarshaling JSON: %w", err)
+    }
+
+    return result, nil
+}
+
+func (c *SpireClient) SpireRequest(endpoint string, agent SpireAgent, method string, payload interface{}) (SpireResponse, error) {
+    // Call the generic version with a map
+    resp, err := SpireRequestGeneric[map[string]interface{}](c, endpoint, agent, method, payload)
+    if err != nil {
+        return SpireResponse{}, err
+    }
+    // Convert base response back to the named SpireResponse type
+    return SpireResponse{Records: resp.Records, Count: resp.Count}, nil
 }
 
 // Attempts to get rool url to check if provided credentials are valid
@@ -145,6 +154,36 @@ func ConvertFilter(filters map[string]interface{}) (string, error) {
     }
 	
     return string(jsonBytes), nil
+}
+
+// FetchSpireRecords handles pagination into a slice of specific structs [T]
+func FetchSpireRecords[T any](c *SpireClient, endpoint string, filters map[string]interface{}, agent SpireAgent) ([]T, error) {
+    const maxLimit = 10000
+    filter, _ := ConvertFilter(filters)
+    baseURL, _ := url.Parse(endpoint)
+    q := baseURL.Query()
+    q.Set("limit", fmt.Sprintf("%d", maxLimit))
+    if filter != "" { q.Set("filter", filter) }
+    baseURL.RawQuery = q.Encode()
+
+    initialResponse, err := SpireRequestGeneric[T](c, baseURL.String(), agent, "GET", nil)
+    if err != nil { return nil, err }
+
+    records := initialResponse.Records
+    count := int(initialResponse.Count)
+    if count <= maxLimit { return records, nil }
+
+    allRecords := make([]T, 0, count)
+    allRecords = append(allRecords, records...)
+
+    for start := maxLimit; len(allRecords) < count; start += maxLimit {
+        q.Set("start", fmt.Sprintf("%d", start))
+        baseURL.RawQuery = q.Encode()
+        nextPage, err := SpireRequestGeneric[T](c, baseURL.String(), agent, "GET", nil)
+        if err != nil { return nil, err }
+        allRecords = append(allRecords, nextPage.Records...)
+    }
+    return allRecords, nil
 }
 
 // Gets ALL records for a given endpoint
